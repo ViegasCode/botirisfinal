@@ -62,12 +62,50 @@ def get_or_create_worksheet(sheet, title, headers):
         _ws.update(f"A1:{chr(64 + len(headers))}1", [headers])
     return _ws
 
-ws_custos = get_or_create_worksheet(sh, SHEET_TAB, ["Data", "Cidade", "Custo", "Tipo"])
+# Cabeçalho novo da aba Custos com "Descrição" após "Cidade"
+CUSTOS_HEADERS = ["Data", "Cidade", "Descrição", "Custo", "Tipo"]
+
+ws_custos = get_or_create_worksheet(sh, SHEET_TAB, CUSTOS_HEADERS)
 ws_eventos = get_or_create_worksheet(sh, SHEET_EVENTS_TAB, ["Data", "Hora", "Título", "Local", "Observações"])
 ws_checkins = get_or_create_worksheet(
     sh, SHEET_CHECKINS_TAB,
     ["Data","Hora","TZ","Lat","Lon","Local","País","Categoria","Descrição","Odômetro (km)","Foto (file_id)","Fonte"]
 )
+
+def ensure_custos_schema():
+    """
+    Garante que a aba de Custos tenha a coluna 'Descrição' (C),
+    migrando dados se necessário.
+    - Se os headers forem antigos: ["Data","Cidade","Custo","Tipo"], insere a coluna C e ajusta.
+    - Se já tiver 'Descrição', não faz nada.
+    """
+    try:
+        headers = ws_custos.row_values(1)
+    except Exception:
+        return
+    # Caso recente (já correto)
+    if len(headers) >= 3 and headers[0] == "Data" and headers[1] == "Cidade" and "Descrição" in headers:
+        return
+    # Caso antigo: 4 colunas sem "Descrição"
+    if headers[:4] == ["Data", "Cidade", "Custo", "Tipo"]:
+        # Inserir coluna em C (3ª posição)
+        try:
+            # gspread tem insert_cols; insere uma coluna vazia na posição 3
+            ws_custos.insert_cols([[]], col=3)
+        except AttributeError:
+            # fallback: aumenta colunas e atualiza intervalo (sem mover dados — menos elegante)
+            ws_custos.add_cols(1)
+            # Como fallback não move, apenas atualiza header manualmente:
+            # Mas o ideal é a API com insert_cols, que preserva/move dados.
+        # Atualiza headers corretos
+        ws_custos.update("A1:E1", [CUSTOS_HEADERS])
+        # Não há necessidade de migrar valores de descrição (ficarão vazios).
+    else:
+        # Se algo muito fora do padrão, força headers mínimos atuais
+        ws_custos.update("A1:E1", [CUSTOS_HEADERS])
+
+# Garantir esquema correto
+ensure_custos_schema()
 
 print("🔗 Testando conexão com Google Sheets...")
 try:
@@ -214,14 +252,16 @@ async def start(m: Message, state: FSMContext):
 # ================= CUSTOS =================
 class CustoForm(StatesGroup):
     waiting_city = State()
+    waiting_desc = State()
     waiting_value = State()
     waiting_type = State()
 
-def append_cost_row(cidade: str, custo_str: str, tipo: str):
+def append_cost_row(cidade: str, descricao: str, custo_str: str, tipo: str):
     dt = now_tz().strftime("%d/%m/%Y")
     custo = normalize_money(custo_str)
     row = find_first_empty_row_custos()
-    ws_custos.update(f"A{row}:D{row}", [[dt, cidade, custo, tipo]])
+    # Agora há 5 colunas: A=Data, B=Cidade, C=Descrição, D=Custo, E=Tipo
+    ws_custos.update(f"A{row}:E{row}", [[dt, cidade, descricao, custo, tipo]])
     return row
 
 @dp.message(F.text.contains("Adicionar custo"))
@@ -234,6 +274,13 @@ async def add_cost(m: Message, state: FSMContext):
 @dp.message(CustoForm.waiting_city)
 async def step_city(m: Message, state: FSMContext):
     await state.update_data(cidade=m.text.strip())
+    await state.set_state(CustoForm.waiting_desc)
+    await send_md_safe(m, "Escreva uma **descrição** curta (ex.: *Almoço no mercado central*). Use `-` para deixar em branco.")
+
+@dp.message(CustoForm.waiting_desc)
+async def step_desc(m: Message, state: FSMContext):
+    desc = "" if m.text.strip() == "-" else m.text.strip()
+    await state.update_data(descricao=desc)
     await state.set_state(CustoForm.waiting_value)
     await send_md_safe(m, "Qual **valor**? (ex.: *150*, *150,90* ou *150.90*)")
 
@@ -254,18 +301,21 @@ async def step_type(m: Message, state: FSMContext):
     tipo = m.text.strip()
     data = await state.get_data()
     cidade = data["cidade"]
+    descricao = data.get("descricao", "")
     valor = data["valor"]
     try:
-        row = append_cost_row(cidade=cidade, custo_str=valor, tipo=tipo)
+        row = append_cost_row(cidade=cidade, descricao=descricao, custo_str=valor, tipo=tipo)
     except Exception as e:
         await send_md_safe(m, f"Não consegui salvar no Google Sheets 😕\nErro: `{e}`")
         await state.clear()
         return
 
+    desc_line = f"**Descrição:** {descricao}\n" if descricao else ""
     await send_md_safe(
         m,
         f"**Custo registrado com sucesso!** ✅\n\n"
-        f"**Data:** hoje\n**Cidade:** {cidade}\n**Valor:** {valor}\n**Tipo:** {tipo}\n"
+        f"**Data:** hoje\n**Cidade:** {cidade}\n{desc_line}"
+        f"**Valor:** {valor}\n**Tipo:** {tipo}\n"
         f"(gravado na linha {row} da aba *{SHEET_TAB}*)"
     )
     await m.answer(reply_markup=main_keyboard())
@@ -695,6 +745,8 @@ class CustosPeriodoForm(StatesGroup):
 
 def _sumarizar_custos_por_periodo(start_date=None, end_date=None):
     linhas = ws_custos.get_all_values()
+    # Agora os dados começam na linha 3, com colunas:
+    # 0=Data, 1=Cidade, 2=Descrição, 3=Custo, 4=Tipo
     dados = linhas[2:] if len(linhas) > 2 else []
 
     total = 0.0
@@ -702,9 +754,12 @@ def _sumarizar_custos_por_periodo(start_date=None, end_date=None):
     count = 0
 
     for r in dados:
-        if len(r) < 4:
+        if len(r) < 5:
             continue
-        data_s, _cidade, custo_s, tipo = r[0].strip(), r[1].strip(), r[2].strip(), r[3].strip()
+        data_s = r[0].strip()
+        custo_s = r[3].strip()
+        tipo = r[4].strip()
+
         d = _parse_br_date(data_s)
         if not d:
             continue
