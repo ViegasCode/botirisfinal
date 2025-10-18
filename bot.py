@@ -269,13 +269,13 @@ def append_cost_row(cidade: str, descricao: str, custo_str: str, tipo: str):
 async def add_cost(m: Message, state: FSMContext):
     await state.clear()
     await state.set_state(CustoForm.waiting_city)
-    await send_md_safe(m, "Qual **cidade**? (ex.: *Uyuni*)")
+    await send_md_safe(m, "Qual **País**? (ex.: *Brasil*)")
 
 @dp.message(CustoForm.waiting_city)
 async def step_city(m: Message, state: FSMContext):
     await state.update_data(cidade=m.text.strip())
     await state.set_state(CustoForm.waiting_desc)
-    await send_md_safe(m, "Escreva uma **descrição** curta (ex.: *Almoço no mercado central*, SP x PR). Use `-` para deixar em branco.")
+    await send_md_safe(m, "Escreva uma **descrição** curta (ex.: *Almoço no mercado central*, *São Paulo x Paraná*). Use `-` para deixar em branco.")
 
 @dp.message(CustoForm.waiting_desc)
 async def step_desc(m: Message, state: FSMContext):
