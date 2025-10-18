@@ -118,6 +118,20 @@ def _last_7_days_range():
     start = today - timedelta(days=6)
     return start, today
 
+# === Envio seguro (evita crash por Markdown quebrado) ===
+from aiogram.exceptions import TelegramBadRequest
+
+async def send_md_safe(message_or_cbmsg, text: str, *, disable_preview: bool = False):
+    """
+    Tenta enviar com Markdown; se der TelegramBadRequest (parse),
+    reenvia sem parse_mode.
+    """
+    kwargs = {"disable_web_page_preview": disable_preview}
+    try:
+        await message_or_cbmsg.answer(text, parse_mode="Markdown", **kwargs)
+    except TelegramBadRequest:
+        await message_or_cbmsg.answer(text, parse_mode=None, **kwargs)
+
 # ================= Bot / Teclado =================
 dp = Dispatcher(storage=MemoryStorage())
 
@@ -537,7 +551,7 @@ async def agenda_hoje(m: Message, state: FSMContext):
     else:
         partes.append("🗓️ *Eventos*\n• (nenhum evento cadastrado hoje)")
 
-    await m.answer("\n".join(partes), parse_mode="Markdown")
+    await send_md_safe(m, "\n".join(partes))
 
 # ================= ROTEIRO (N dias / completo) =================
 def _today_date():
@@ -571,7 +585,7 @@ async def roteiro_listar_intervalo(cb: CallbackQuery):
     try:
         arg = (cb.data or "").split(":", 1)[1]
     except Exception:
-        await cb.message.answer("Callback inválido. Tente novamente com /roteiro.")
+        await send_md_safe(cb.message, "Callback inválido. Tente novamente com /roteiro.")
         return
 
     itens = []
@@ -608,7 +622,7 @@ async def roteiro_listar_intervalo(cb: CallbackQuery):
         try:
             n_days = int(arg)
         except:
-            await cb.message.answer("Valor inválido. Tente novamente.")
+            await send_md_safe(cb.message, "Valor inválido. Tente novamente.")
             return
         base = _today_date()
         alvo = {(base + timedelta(days=i)).strftime("%d/%m/%Y") for i in range(n_days)}
@@ -618,13 +632,13 @@ async def roteiro_listar_intervalo(cb: CallbackQuery):
         titulo = "🧭 *Roteiro completo*\n"
 
     if not itens:
-        await cb.message.answer("Não encontrei trechos para o período selecionado.")
+        await send_md_safe(cb.message, "Não encontrei trechos para o período selecionado.")
         return
 
     bloco = titulo
 
     async def _send(text):
-        await cb.message.answer(text, parse_mode="Markdown", disable_web_page_preview=True)
+        await send_md_safe(cb.message, f"Não consegui abrir a aba *Roteiro da Viagem*.\nErro: `{e}`")
 
     for it in itens:
         linha = (
