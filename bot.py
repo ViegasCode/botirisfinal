@@ -15,6 +15,7 @@ from aiogram.types import (
     InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 )
 from aiogram.exceptions import TelegramBadRequest
+from html import escape
 
 from dotenv import load_dotenv
 import gspread
@@ -119,7 +120,7 @@ def _last_7_days_range():
     start = today - timedelta(days=6)
     return start, today
 
-# === Envio seguro (evita crash por Markdown quebrado) ===
+# === Envio seguro (fallback) ===
 async def send_md_safe(message_or_cbmsg, text: str, *, disable_preview: bool = False):
     """
     Tenta enviar com Markdown; se der TelegramBadRequest (parse),
@@ -130,6 +131,14 @@ async def send_md_safe(message_or_cbmsg, text: str, *, disable_preview: bool = F
         await message_or_cbmsg.answer(text, parse_mode="Markdown", **kwargs)
     except TelegramBadRequest:
         await message_or_cbmsg.answer(text, parse_mode=None, **kwargs)
+
+async def send_html(message_or_cbmsg, html: str, *, disable_preview: bool = False):
+    """Envia HTML escapado; se der erro, envia sem parse."""
+    kwargs = {"parse_mode": "HTML", "disable_web_page_preview": disable_preview}
+    try:
+        await message_or_cbmsg.answer(html, **kwargs)
+    except TelegramBadRequest:
+        await message_or_cbmsg.answer(html, disable_web_page_preview=disable_preview)
 
 # ================= Bot / Teclado =================
 dp = Dispatcher(storage=MemoryStorage())
@@ -187,7 +196,6 @@ async def start(m: Message, state: FSMContext):
     )
 
     if LOGO_FILE_ID:
-        # foto + caption (se quebrar markdown na caption, trata com try/except)
         try:
             await m.answer_photo(photo=LOGO_FILE_ID, caption=caption, parse_mode="Markdown", reply_markup=main_keyboard())
         except TelegramBadRequest:
@@ -515,7 +523,7 @@ async def _finalize_checkin(m: Message, state: FSMContext):
         if reply_markup:
             await m.answer(reply_markup=reply_markup)
 
-# ================= Agenda / Roteiro HOJE =================
+# ================= Agenda / Roteiro HOJE (HTML) =================
 @dp.message(F.text.contains("Agenda"))
 @dp.message(Command("hoje"))
 async def agenda_hoje(m: Message, state: FSMContext):
@@ -548,27 +556,33 @@ async def agenda_hoje(m: Message, state: FSMContext):
             return datetime.max
     eventos_hoje.sort(key=_key)
 
-    partes = [f"📌 *Agenda de hoje* ({hoje})\n"]
+    linhas = [f"📌 <b>Agenda de hoje</b> ({escape(hoje)})\n"]
+
     if trecho:
-        partes.append(
-            "🛣️ *Roteiro*\n"
-            f"• {trecho['percurso']}\n"
-            f"• {trecho['km']} km — {trecho['horas']}\n"
-            + (f"• Obs: {trecho['obs']}\n" if trecho['obs'] else "")
+        linhas.append(
+            "🛣️ <b>Roteiro</b>\n"
+            f"• {escape(trecho['percurso'])}\n"
+            f"• {escape(trecho['km'])} km — {escape(trecho['horas'])}\n"
+            + (f"• Obs: {escape(trecho['obs'])}\n" if trecho['obs'] else "")
         )
     else:
-        partes.append("🛣️ *Roteiro*\n• (não encontrado para hoje)\n")
+        linhas.append("🛣️ <b>Roteiro</b>\n• (não encontrado para hoje)\n")
 
     if eventos_hoje:
-        partes.append("🗓️ *Eventos*\n" + "\n".join(
-            [f"• {r[1]} — {r[2]} (*{r[3]}*){(' — ' + r[4]) if r[4] else ''}" for r in eventos_hoje]
-        ))
+        ev_lines = []
+        for r in eventos_hoje:
+            hora = escape(r[1])
+            titulo = escape(r[2])
+            local = escape(r[3])
+            obs = escape(r[4]) if len(r) > 4 and r[4] else ""
+            ev_lines.append(f"• {hora} — {titulo} (<i>{local}</i>)" + (f" — {obs}" if obs else ""))
+        linhas.append("🗓️ <b>Eventos</b>\n" + "\n".join(ev_lines))
     else:
-        partes.append("🗓️ *Eventos*\n• (nenhum evento cadastrado hoje)")
+        linhas.append("🗓️ <b>Eventos</b>\n• (nenhum evento cadastrado hoje)")
 
-    await send_md_safe(m, "\n".join(partes))
+    await send_html(m, "\n".join(linhas))
 
-# ================= ROTEIRO (N dias / completo) =================
+# ================= ROTEIRO (N dias / completo) — HTML =================
 def _today_date():
     return now_tz().date()
 
@@ -594,13 +608,13 @@ async def roteiro_listar_intervalo(cb: CallbackQuery):
         ws_roteiro = sh.worksheet("Roteiro da Viagem")
         linhas = ws_roteiro.get_all_values()
     except Exception as e:
-        await send_md_safe(cb.message, f"Não consegui abrir a aba *Roteiro da Viagem*.\nErro: `{e}`")
+        await send_html(cb.message, f"Não consegui abrir a aba <b>Roteiro da Viagem</b>.<br/>Erro: <code>{escape(str(e))}</code>")
         return
 
     try:
         arg = (cb.data or "").split(":", 1)[1]
     except Exception:
-        await send_md_safe(cb.message, "Callback inválido. Tente novamente com /roteiro.")
+        await send_html(cb.message, "Callback inválido. Tente novamente com /roteiro.")
         return
 
     itens = []
@@ -637,33 +651,34 @@ async def roteiro_listar_intervalo(cb: CallbackQuery):
         try:
             n_days = int(arg)
         except:
-            await send_md_safe(cb.message, "Valor inválido. Tente novamente.")
+            await send_html(cb.message, "Valor inválido. Tente novamente.")
             return
         base = _today_date()
         alvo = {(base + timedelta(days=i)).strftime("%d/%m/%Y") for i in range(n_days)}
         itens = [it for it in itens if it["data"] in alvo]
-        titulo = f"🧭 **Roteiro — próximos {n_days} dia(s)** (inclui hoje)\n"
+        titulo = f"🧭 <b>Roteiro — próximos {n_days} dia(s)</b> (inclui hoje)\n"
     else:
-        titulo = "🧭 **Roteiro completo**\n"
+        titulo = "🧭 <b>Roteiro completo</b>\n"
 
     if not itens:
-        await send_md_safe(cb.message, "Não encontrei trechos para o período selecionado.")
+        await send_html(cb.message, "Não encontrei trechos para o período selecionado.")
         return
 
     async def _send(text):
-        await send_md_safe(cb.message, text, disable_preview=True)
+        await send_html(cb.message, text, disable_preview=True)
 
     bloco = titulo
     for it in itens:
         linha = (
-            f"\n📅 **{it['data']}** — Dia {it['dia']}\n"
-            f"🛣️ {it['percurso']}\n"
-            f"⏱️ {it['km']} km — {it['horas']}\n"
+            f"\n📅 <b>{escape(it['data'])}</b> — Dia {escape(it['dia'])}\n"
+            f"🛣️ {escape(it['percurso'])}\n"
+            f"⏱️ {escape(it['km'])} km — {escape(it['horas'])}\n"
         )
         if it["obs"]:
-            linha += f"📝 {it['obs']}\n"
+            linha += f"📝 {escape(it['obs'])}\n"
         if it["maps"] and it["maps"].startswith("http"):
-            linha += f"🔗 {it['maps']}\n"
+            url = escape(it["maps"])
+            linha += f'🔗 <a href="{url}">Abrir mapa</a>\n'
 
         if len(bloco) + len(linha) > TELEGRAM_CHUNK:
             await _send(bloco)
