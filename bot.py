@@ -275,7 +275,7 @@ async def add_cost(m: Message, state: FSMContext):
 async def step_city(m: Message, state: FSMContext):
     await state.update_data(cidade=m.text.strip())
     await state.set_state(CustoForm.waiting_desc)
-    await send_md_safe(m, "Escreva uma **descrição** curta (ex.: *Almoço no mercado central*). Use `-` para deixar em branco.")
+    await send_md_safe(m, "Escreva uma **descrição** curta (ex.: *Almoço no mercado central*, SP x PR). Use `-` para deixar em branco.")
 
 @dp.message(CustoForm.waiting_desc)
 async def step_desc(m: Message, state: FSMContext):
