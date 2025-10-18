@@ -1,0 +1,6 @@
+aiogram>=3.4
+gspread>=6.0
+google-auth>=2.30
+python-dotenv>=1.0
+tzdata>=2024.1
+apscheduler>=3.10
