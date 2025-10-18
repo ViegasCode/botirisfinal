@@ -642,9 +642,9 @@ async def roteiro_listar_intervalo(cb: CallbackQuery):
         base = _today_date()
         alvo = {(base + timedelta(days=i)).strftime("%d/%m/%Y") for i in range(n_days)}
         itens = [it for it in itens if it["data"] in alvo]
-        titulo = f"🧭 *Roteiro — próximos {n_days} dia(s)* (inclui hoje)\n"
+        titulo = f"🧭 **Roteiro — próximos {n_days} dia(s)** (inclui hoje)\n"
     else:
-        titulo = "🧭 *Roteiro completo*\n"
+        titulo = "🧭 **Roteiro completo**\n"
 
     if not itens:
         await send_md_safe(cb.message, "Não encontrei trechos para o período selecionado.")
@@ -656,7 +656,7 @@ async def roteiro_listar_intervalo(cb: CallbackQuery):
     bloco = titulo
     for it in itens:
         linha = (
-            f"\n📅 *{it['data']}* — Dia {it['dia']}\n"
+            f"\n📅 **{it['data']}** — Dia {it['dia']}\n"
             f"🛣️ {it['percurso']}\n"
             f"⏱️ {it['km']} km — {it['horas']}\n"
         )
