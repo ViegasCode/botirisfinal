@@ -14,6 +14,7 @@ from aiogram.types import (
     Message, ReplyKeyboardMarkup, KeyboardButton, FSInputFile,
     InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 )
+from aiogram.exceptions import TelegramBadRequest
 
 from dotenv import load_dotenv
 import gspread
@@ -119,8 +120,6 @@ def _last_7_days_range():
     return start, today
 
 # === Envio seguro (evita crash por Markdown quebrado) ===
-from aiogram.exceptions import TelegramBadRequest
-
 async def send_md_safe(message_or_cbmsg, text: str, *, disable_preview: bool = False):
     """
     Tenta enviar com Markdown; se der TelegramBadRequest (parse),
@@ -188,14 +187,21 @@ async def start(m: Message, state: FSMContext):
     )
 
     if LOGO_FILE_ID:
-        await m.answer_photo(photo=LOGO_FILE_ID, caption=caption, parse_mode="Markdown", reply_markup=main_keyboard())
+        # foto + caption (se quebrar markdown na caption, trata com try/except)
+        try:
+            await m.answer_photo(photo=LOGO_FILE_ID, caption=caption, parse_mode="Markdown", reply_markup=main_keyboard())
+        except TelegramBadRequest:
+            await m.answer_photo(photo=LOGO_FILE_ID, caption=caption, parse_mode=None, reply_markup=main_keyboard())
         return
 
     logo_path = os.path.join(os.path.dirname(__file__), "logo_iris.png")
     if os.path.exists(logo_path):
-        await m.answer_photo(photo=FSInputFile(logo_path), caption=caption, parse_mode="Markdown", reply_markup=main_keyboard())
+        try:
+            await m.answer_photo(photo=FSInputFile(logo_path), caption=caption, parse_mode="Markdown", reply_markup=main_keyboard())
+        except TelegramBadRequest:
+            await m.answer_photo(photo=FSInputFile(logo_path), caption=caption, parse_mode=None, reply_markup=main_keyboard())
     else:
-        await m.answer(caption, parse_mode="Markdown", reply_markup=main_keyboard())
+        await send_md_safe(m, caption)
 
 # ================= CUSTOS =================
 class CustoForm(StatesGroup):
@@ -213,15 +219,15 @@ def append_cost_row(cidade: str, custo_str: str, tipo: str):
 @dp.message(F.text.contains("Adicionar custo"))
 @dp.message(Command("custo"))
 async def add_cost(m: Message, state: FSMContext):
-    await state.clear()  # evita ficar preso em outro fluxo
+    await state.clear()
     await state.set_state(CustoForm.waiting_city)
-    await m.answer("Qual **cidade**? (ex.: *Uyuni*)", parse_mode="Markdown")
+    await send_md_safe(m, "Qual **cidade**? (ex.: *Uyuni*)")
 
 @dp.message(CustoForm.waiting_city)
 async def step_city(m: Message, state: FSMContext):
     await state.update_data(cidade=m.text.strip())
     await state.set_state(CustoForm.waiting_value)
-    await m.answer("Qual **valor**? (ex.: *150*, *150,90* ou *150.90*)", parse_mode="Markdown")
+    await send_md_safe(m, "Qual **valor**? (ex.: *150*, *150,90* ou *150.90*)")
 
 @dp.message(CustoForm.waiting_value)
 async def step_value(m: Message, state: FSMContext):
@@ -229,11 +235,11 @@ async def step_value(m: Message, state: FSMContext):
     try:
         _ = normalize_money(valor_raw)
     except Exception:
-        await m.answer("Valor inválido. Tente no formato *150* ou *150,90*.", parse_mode="Markdown")
+        await send_md_safe(m, "Valor inválido. Tente no formato *150* ou *150,90*.")
         return
     await state.update_data(valor=valor_raw)
     await state.set_state(CustoForm.waiting_type)
-    await m.answer("Qual **tipo**? (ex.: *combustível*, *hospedagem*, *alimentação*, *passeio*...)", parse_mode="Markdown")
+    await send_md_safe(m, "Qual **tipo**? (ex.: *combustível*, *hospedagem*, *alimentação*, *passeio*...)")
 
 @dp.message(CustoForm.waiting_type)
 async def step_type(m: Message, state: FSMContext):
@@ -244,17 +250,17 @@ async def step_type(m: Message, state: FSMContext):
     try:
         row = append_cost_row(cidade=cidade, custo_str=valor, tipo=tipo)
     except Exception as e:
-        await m.answer(f"Não consegui salvar no Google Sheets. 😕")
+        await send_md_safe(m, f"Não consegui salvar no Google Sheets 😕\nErro: `{e}`")
         await state.clear()
         return
 
-    await m.answer(
+    await send_md_safe(
+        m,
         f"**Custo registrado com sucesso!** ✅\n\n"
         f"**Data:** hoje\n**Cidade:** {cidade}\n**Valor:** {valor}\n**Tipo:** {tipo}\n"
-        f"(gravado na linha {row} da aba *{SHEET_TAB}*)",
-        reply_markup=main_keyboard(),
-        parse_mode="Markdown"
+        f"(gravado na linha {row} da aba *{SHEET_TAB}*)"
     )
+    await m.answer(reply_markup=main_keyboard())
     await state.clear()
 
 # ================= EVENTOS =================
@@ -285,39 +291,39 @@ def _parse_time_hhmm(txt: str):
 async def evento_start(m: Message, state: FSMContext):
     await state.clear()
     await state.set_state(EventoForm.waiting_title)
-    await m.answer("Qual o **título** do evento/lugar? (ex.: *Ruínas Jesuíticas*)", parse_mode="Markdown")
+    await send_md_safe(m, "Qual o **título** do evento/lugar? (ex.: *Ruínas Jesuíticas*)")
 
 @dp.message(EventoForm.waiting_title)
 async def evento_title(m: Message, state: FSMContext):
     await state.update_data(title=m.text.strip())
     await state.set_state(EventoForm.waiting_place)
-    await m.answer("Qual o **local**? (ex.: *Encarnación*)", parse_mode="Markdown")
+    await send_md_safe(m, "Qual o **local**? (ex.: *Encarnación*)")
 
 @dp.message(EventoForm.waiting_place)
 async def evento_place(m: Message, state: FSMContext):
     await state.update_data(place=m.text.strip())
     await state.set_state(EventoForm.waiting_date)
-    await m.answer("Qual a **data**? (formato *dd/mm/aaaa*)", parse_mode="Markdown")
+    await send_md_safe(m, "Qual a **data**? (formato *dd/mm/aaaa*)")
 
 @dp.message(EventoForm.waiting_date)
 async def evento_date(m: Message, state: FSMContext):
     d = _parse_date_ddmmyyyy(m.text)
     if not d:
-        await m.answer("Data inválida. Use *dd/mm/aaaa* (ex.: 26/10/2025).", parse_mode="Markdown")
+        await send_md_safe(m, "Data inválida. Use *dd/mm/aaaa* (ex.: 26/10/2025).")
         return
     await state.update_data(date=m.text.strip())
     await state.set_state(EventoForm.waiting_time)
-    await m.answer("Qual a **hora**? (formato *HH:MM* 24h, ex.: 16:30)", parse_mode="Markdown")
+    await send_md_safe(m, "Qual a **hora**? (formato *HH:MM* 24h, ex.: 16:30)")
 
 @dp.message(EventoForm.waiting_time)
 async def evento_time(m: Message, state: FSMContext):
     t = _parse_time_hhmm(m.text)
     if not t:
-        await m.answer("Hora inválida. Use *HH:MM* (ex.: 08:00).", parse_mode="Markdown")
+        await send_md_safe(m, "Hora inválida. Use *HH:MM* (ex.: 08:00).")
         return
     await state.update_data(time=m.text.strip())
     await state.set_state(EventoForm.waiting_notes)
-    await m.answer("Alguma **observação**? (ou envie `-` para deixar em branco)", parse_mode="Markdown")
+    await send_md_safe(m, "Alguma **observação**? (ou envie `-` para deixar em branco)")
 
 @dp.message(EventoForm.waiting_notes)
 async def evento_notes(m: Message, state: FSMContext):
@@ -332,14 +338,14 @@ async def evento_notes(m: Message, state: FSMContext):
     ws_eventos.update(f"A{row}:E{row}", [[date_, time_, title, place, notes]])
 
     await state.clear()
-    await m.answer(
+    await send_md_safe(
+        m,
         "✅ **Evento cadastrado!**\n\n"
         f"📅 {date_} — ⏰ {time_}\n"
         f"📝 *{title}* em *{place}*\n"
-        f"{'Obs: ' + notes if notes else ''}",
-        parse_mode="Markdown",
-        reply_markup=main_keyboard()
+        f"{'Obs: ' + notes if notes else ''}"
     )
+    await m.answer(reply_markup=main_keyboard())
 
 # ================= CHECKINS =================
 class CheckinForm(StatesGroup):
@@ -362,7 +368,8 @@ async def checkin_start(m: Message, state: FSMContext):
         keyboard=[[KeyboardButton(text=cat)] for cat in CHECKIN_CATEGORIES],
         resize_keyboard=True
     )
-    await m.answer("Escolha a **categoria** do check-in:", parse_mode="Markdown", reply_markup=kb)
+    await send_md_safe(m, "Escolha a **categoria** do check-in:")
+    await m.answer(reply_markup=kb)
 
 @dp.message(CheckinForm.waiting_category)
 async def checkin_category(m: Message, state: FSMContext):
@@ -372,7 +379,8 @@ async def checkin_category(m: Message, state: FSMContext):
         return
     await state.update_data(categoria=cat)
     await state.set_state(CheckinForm.waiting_desc)
-    await m.answer("Escreva uma **descrição curta** (ex.: 'Marco das 3 Fronteiras')", parse_mode="Markdown", reply_markup=main_keyboard())
+    await send_md_safe(m, "Escreva uma **descrição curta** (ex.: 'Marco das 3 Fronteiras')")
+    await m.answer(reply_markup=main_keyboard())
 
 @dp.message(CheckinForm.waiting_desc)
 async def checkin_desc(m: Message, state: FSMContext):
@@ -383,32 +391,33 @@ async def checkin_desc(m: Message, state: FSMContext):
                   [KeyboardButton(text="Pular localização")]],
         resize_keyboard=True
     )
-    await m.answer("Compartilhe sua **localização** ou toque em *Pular localização*.", parse_mode="Markdown", reply_markup=kb)
+    await send_md_safe(m, "Compartilhe sua **localização** ou toque em *Pular localização*.")
+    await m.answer(reply_markup=kb)
 
 @dp.message(CheckinForm.waiting_location, F.location)
 async def checkin_location(m: Message, state: FSMContext):
     loc = m.location
     await state.update_data(lat=loc.latitude, lon=loc.longitude, fonte="localização")
     await state.set_state(CheckinForm.waiting_place)
-    await m.answer("Qual **local/cidade**?", parse_mode="Markdown", reply_markup=main_keyboard())
+    await send_md_safe(m, "Qual **local/cidade**?")
 
 @dp.message(CheckinForm.waiting_location, F.text.casefold() == "pular localização")
 async def checkin_skip_location(m: Message, state: FSMContext):
     await state.update_data(fonte="manual")
     await state.set_state(CheckinForm.waiting_place)
-    await m.answer("Qual **local/cidade**?", parse_mode="Markdown", reply_markup=main_keyboard())
+    await send_md_safe(m, "Qual **local/cidade**?")
 
 @dp.message(CheckinForm.waiting_place)
 async def checkin_place(m: Message, state: FSMContext):
     await state.update_data(local=m.text.strip())
     await state.set_state(CheckinForm.waiting_country)
-    await m.answer("Qual **país**?", parse_mode="Markdown")
+    await send_md_safe(m, "Qual **país**?")
 
 @dp.message(CheckinForm.waiting_country)
 async def checkin_country(m: Message, state: FSMContext):
     await state.update_data(pais=m.text.strip())
     await state.set_state(CheckinForm.waiting_odo)
-    await m.answer("Informe o **odômetro (km)** ou envie `-` para pular.", parse_mode="Markdown")
+    await send_md_safe(m, "Informe o **odômetro (km)** ou envie `-` para pular.")
 
 @dp.message(CheckinForm.waiting_odo)
 async def checkin_odo(m: Message, state: FSMContext):
@@ -422,7 +431,7 @@ async def checkin_odo(m: Message, state: FSMContext):
             return
     await state.update_data(odo=odo)
     await state.set_state(CheckinForm.waiting_photo)
-    await m.answer("Envie uma **foto** deste check-in (opcional) ou mande `-` para finalizar.", parse_mode="Markdown")
+    await send_md_safe(m, "Envie uma **foto** deste check-in (opcional) ou mande `-` para finalizar.")
 
 @dp.message(CheckinForm.waiting_photo, F.photo)
 async def checkin_photo(m: Message, state: FSMContext):
@@ -485,20 +494,26 @@ async def _finalize_checkin(m: Message, state: FSMContext):
 
     photo_file_id = values[10]
     if photo_file_id:
-        await m.answer_photo(
-            photo=photo_file_id,
-            caption=caption,
-            parse_mode="Markdown",
-            reply_markup=reply_markup or None
-        )
+        try:
+            await m.answer_photo(
+                photo=photo_file_id,
+                caption=caption,
+                parse_mode="Markdown",
+                reply_markup=reply_markup or None
+            )
+        except TelegramBadRequest:
+            await m.answer_photo(
+                photo=photo_file_id,
+                caption=caption,
+                parse_mode=None,
+                reply_markup=reply_markup or None
+            )
     else:
         if lat is not None and lon is not None:
             await m.answer_location(latitude=lat, longitude=lon)
-        await m.answer(
-            "✅ **Check-in registrado!**\n" + caption,
-            parse_mode="Markdown",
-            reply_markup=reply_markup or None
-        )
+        await send_md_safe(m, "✅ **Check-in registrado!**\n" + caption)
+        if reply_markup:
+            await m.answer(reply_markup=reply_markup)
 
 # ================= Agenda / Roteiro HOJE =================
 @dp.message(F.text.contains("Agenda"))
@@ -579,7 +594,7 @@ async def roteiro_listar_intervalo(cb: CallbackQuery):
         ws_roteiro = sh.worksheet("Roteiro da Viagem")
         linhas = ws_roteiro.get_all_values()
     except Exception as e:
-        await cb.message.answer(f"Não consegui abrir a aba *Roteiro da Viagem*.", parse_mode="Markdown")
+        await send_md_safe(cb.message, f"Não consegui abrir a aba *Roteiro da Viagem*.\nErro: `{e}`")
         return
 
     try:
@@ -635,11 +650,10 @@ async def roteiro_listar_intervalo(cb: CallbackQuery):
         await send_md_safe(cb.message, "Não encontrei trechos para o período selecionado.")
         return
 
-    bloco = titulo
-
     async def _send(text):
-        await send_md_safe(cb.message, f"Não consegui abrir a aba *Roteiro da Viagem*. Contate o Desenvolvedor.")
+        await send_md_safe(cb.message, text, disable_preview=True)
 
+    bloco = titulo
     for it in itens:
         linha = (
             f"\n📅 *{it['data']}* — Dia {it['dia']}\n"
@@ -741,46 +755,46 @@ async def custos_callback(cb: CallbackQuery, state: FSMContext):
     if arg == "today":
         d = now_tz().date()
         total, por_tipo, count, periodo = _sumarizar_custos_por_periodo(d, d)
-        await cb.message.answer(_formatar_resumo(total, por_tipo, count, periodo), parse_mode="Markdown")
+        await send_md_safe(cb.message, _formatar_resumo(total, por_tipo, count, periodo))
         return
 
     if arg == "7d":
         start, end = _last_7_days_range()
         total, por_tipo, count, periodo = _sumarizar_custos_por_periodo(start, end)
-        await cb.message.answer(_formatar_resumo(total, por_tipo, count, periodo), parse_mode="Markdown")
+        await send_md_safe(cb.message, _formatar_resumo(total, por_tipo, count, periodo))
         return
 
     if arg == "month":
         start, end = _month_range_today()
         total, por_tipo, count, periodo = _sumarizar_custos_por_periodo(start, end)
-        await cb.message.answer(_formatar_resumo(total, por_tipo, count, periodo), parse_mode="Markdown")
+        await send_md_safe(cb.message, _formatar_resumo(total, por_tipo, count, periodo))
         return
 
     if arg == "all":
         total, por_tipo, count, periodo = _sumarizar_custos_por_periodo(None, None)
-        await cb.message.answer(_formatar_resumo(total, por_tipo, count, periodo), parse_mode="Markdown")
+        await send_md_safe(cb.message, _formatar_resumo(total, por_tipo, count, periodo))
         return
 
     if arg == "period":
         await state.set_state(CustosPeriodoForm.waiting_start)
-        await cb.message.answer("Envie a **data inicial** no formato *dd/mm/aaaa* (ex.: 18/10/2025).", parse_mode="Markdown")
+        await send_md_safe(cb.message, "Envie a **data inicial** no formato *dd/mm/aaaa* (ex.: 18/10/2025).")
         return
 
 @dp.message(CustosPeriodoForm.waiting_start)
 async def custos_periodo_inicio(m: Message, state: FSMContext):
     d = _parse_br_date(m.text)
     if not d:
-        await m.answer("Data inválida. Envie no formato *dd/mm/aaaa*.", parse_mode="Markdown")
+        await send_md_safe(m, "Data inválida. Envie no formato *dd/mm/aaaa*.")
         return
     await state.update_data(start=d)
     await state.set_state(CustosPeriodoForm.waiting_end)
-    await m.answer("Agora envie a **data final** no formato *dd/mm/aaaa*.", parse_mode="Markdown")
+    await send_md_safe(m, "Agora envie a **data final** no formato *dd/mm/aaaa*.")
 
 @dp.message(CustosPeriodoForm.waiting_end)
 async def custos_periodo_fim(m: Message, state: FSMContext):
     end = _parse_br_date(m.text)
     if not end:
-        await m.answer("Data inválida. Envie no formato *dd/mm/aaaa*.", parse_mode="Markdown")
+        await send_md_safe(m, "Data inválida. Envie no formato *dd/mm/aaaa*.")
         return
 
     data = await state.get_data()
@@ -790,7 +804,8 @@ async def custos_periodo_fim(m: Message, state: FSMContext):
 
     total, por_tipo, count, periodo = _sumarizar_custos_por_periodo(start, end)
     await state.clear()
-    await m.answer(_formatar_resumo(total, por_tipo, count, periodo), parse_mode="Markdown", reply_markup=main_keyboard())
+    await send_md_safe(m, _formatar_resumo(total, por_tipo, count, periodo))
+    await m.answer(reply_markup=main_keyboard())
 
 # ================= Catch-all (debug) =================
 @dp.message()
@@ -800,7 +815,7 @@ async def _catch_all_log(m: Message):
     except Exception:
         pass
     if DEBUG and m.text:
-        await m.answer(f"(debug) Recebi: `{m.text}`", parse_mode="Markdown")
+        await send_md_safe(m, f"(debug) Recebi: `{m.text}`")
 
 # ================= Run =================
 async def main():
