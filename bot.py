@@ -244,7 +244,7 @@ async def step_type(m: Message, state: FSMContext):
     try:
         row = append_cost_row(cidade=cidade, custo_str=valor, tipo=tipo)
     except Exception as e:
-        await m.answer(f"Não consegui salvar no Google Sheets 😕\nErro: `{e}`")
+        await m.answer(f"Não consegui salvar no Google Sheets. 😕")
         await state.clear()
         return
 
@@ -579,7 +579,7 @@ async def roteiro_listar_intervalo(cb: CallbackQuery):
         ws_roteiro = sh.worksheet("Roteiro da Viagem")
         linhas = ws_roteiro.get_all_values()
     except Exception as e:
-        await cb.message.answer(f"Não consegui abrir a aba *Roteiro da Viagem*.\nErro: `{e}`", parse_mode="Markdown")
+        await cb.message.answer(f"Não consegui abrir a aba *Roteiro da Viagem*.", parse_mode="Markdown")
         return
 
     try:
@@ -638,7 +638,7 @@ async def roteiro_listar_intervalo(cb: CallbackQuery):
     bloco = titulo
 
     async def _send(text):
-        await send_md_safe(cb.message, f"Não consegui abrir a aba *Roteiro da Viagem*.\nErro: `{e}`")
+        await send_md_safe(cb.message, f"Não consegui abrir a aba *Roteiro da Viagem*. Contate o Desenvolvedor.")
 
     for it in itens:
         linha = (
