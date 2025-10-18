@@ -165,7 +165,8 @@ def _build_days_inline_keyboard():
 
 # ================= START =================
 @dp.message(CommandStart())
-async def start(m: Message):
+async def start(m: Message, state: FSMContext):
+    await state.clear()
     print(f"📩 {m.from_user.full_name} — ID: {m.from_user.id}")
     caption = (
         "🏍️ **Bem-vinda ao bot da viagem da Iris Motovicio!**\n\n"
@@ -195,9 +196,10 @@ def append_cost_row(cidade: str, custo_str: str, tipo: str):
     ws_custos.update(f"A{row}:D{row}", [[dt, cidade, custo, tipo]])
     return row
 
-@dp.message(F.text.regexp(r"(?i)custo"))
+@dp.message(F.text.contains("Adicionar custo"))
 @dp.message(Command("custo"))
 async def add_cost(m: Message, state: FSMContext):
+    await state.clear()  # evita ficar preso em outro fluxo
     await state.set_state(CustoForm.waiting_city)
     await m.answer("Qual **cidade**? (ex.: *Uyuni*)", parse_mode="Markdown")
 
@@ -267,6 +269,7 @@ def _parse_time_hhmm(txt: str):
 @dp.message(F.text.regexp(r"(?i)evento"))
 @dp.message(Command("evento"))
 async def evento_start(m: Message, state: FSMContext):
+    await state.clear()
     await state.set_state(EventoForm.waiting_title)
     await m.answer("Qual o **título** do evento/lugar? (ex.: *Ruínas Jesuíticas*)", parse_mode="Markdown")
 
@@ -339,6 +342,7 @@ CHECKIN_CATEGORIES = ["em rota", "parada", "fronteira", "passeio", "pernoite", "
 @dp.message(F.text.contains("Check-in"))
 @dp.message(Command("checkin"))
 async def checkin_start(m: Message, state: FSMContext):
+    await state.clear()
     await state.set_state(CheckinForm.waiting_category)
     kb = ReplyKeyboardMarkup(
         keyboard=[[KeyboardButton(text=cat)] for cat in CHECKIN_CATEGORIES],
@@ -485,7 +489,8 @@ async def _finalize_checkin(m: Message, state: FSMContext):
 # ================= Agenda / Roteiro HOJE =================
 @dp.message(F.text.contains("Agenda"))
 @dp.message(Command("hoje"))
-async def agenda_hoje(m: Message):
+async def agenda_hoje(m: Message, state: FSMContext):
+    await state.clear()
     hoje = today_str_br()
 
     trecho = None
@@ -540,18 +545,21 @@ def _today_date():
 
 @dp.message(F.text.contains("Roteiro"))
 @dp.message(Command("roteiro"))
-async def roteiro_perguntar_dias(m: Message):
+async def roteiro_perguntar_dias(m: Message, state: FSMContext):
+    await state.clear()
     await m.answer(
         "De quantos dias pra frente você quer ver o roteiro (contando hoje)?",
         reply_markup=_build_days_inline_keyboard()
     )
 
-@dp.callback_query(F.data.startswith("roteiro:"))
+@dp.callback_query(F.data.regexp(r"^roteiro:"))
 async def roteiro_listar_intervalo(cb: CallbackQuery):
     try:
         await cb.answer("Carregando…")
     except:
         pass
+    if DEBUG:
+        print("[DBG-CB ROTEIRO]", cb.data)
 
     try:
         ws_roteiro = sh.worksheet("Roteiro da Viagem")
@@ -560,7 +568,11 @@ async def roteiro_listar_intervalo(cb: CallbackQuery):
         await cb.message.answer(f"Não consegui abrir a aba *Roteiro da Viagem*.\nErro: `{e}`", parse_mode="Markdown")
         return
 
-    arg = cb.data.split(":")[1]
+    try:
+        arg = (cb.data or "").split(":", 1)[1]
+    except Exception:
+        await cb.message.answer("Callback inválido. Tente novamente com /roteiro.")
+        return
 
     itens = []
     for row in linhas:
@@ -697,17 +709,20 @@ def _formatar_resumo(total, por_tipo, count, periodo_str):
 
 @dp.message(F.text.contains("Resumo de custos"))
 @dp.message(Command("custos"))
-async def custos_menu(m: Message):
+async def custos_menu(m: Message, state: FSMContext):
+    await state.clear()
     await m.answer("Escolha o período para resumir os custos:", reply_markup=_custos_inline_keyboard())
 
-@dp.callback_query(F.data.startswith("custos:"))
+@dp.callback_query(F.data.regexp(r"^custos:"))
 async def custos_callback(cb: CallbackQuery, state: FSMContext):
     try:
         await cb.answer()
     except:
         pass
+    if DEBUG:
+        print("[DBG-CB CUSTOS]", cb.data)
 
-    arg = cb.data.split(":")[1]
+    arg = (cb.data or "").split(":", 1)[1]
 
     if arg == "today":
         d = now_tz().date()
